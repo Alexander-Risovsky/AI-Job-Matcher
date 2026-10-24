@@ -1,0 +1,71 @@
+# Reuse the EXISTING n8n_default network and running qdrant container.
+# Do not create a second Qdrant or touch n8n_qdrant_data.
+name: ai-job-matcher
+
+x-runtime-env: &runtime-env
+  OLLAMA_BASE_URL: http://host.docker.internal:11434
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_COLLECTION: candidate_profile
+  MCP_FETCH_COMMAND: python
+  MCP_FETCH_ARGS: '["-m","mcp_server_fetch"]'
+  STATE_DB: /app/data/history.sqlite3
+  CHECKPOINT_DB: /app/data/checkpoints.sqlite3
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+      additional_contexts:
+        local_site_packages: ./.venv/lib/python3.12/site-packages
+    image: ai-job-matcher:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      <<: *runtime-env
+      INGEST_HOST: 0.0.0.0
+      INGEST_PORT: "8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - existing_n8n
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"]
+      interval: 15s
+      timeout: 7s
+      retries: 4
+      start_period: 40s
+
+  reader:
+    image: ai-job-matcher:local
+    # Separate service to show Telethon log independently from the agents.
+    command: ["python", "-m", "app.telegram.reader"]
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      <<: *runtime-env
+      TG_SESSION: /sessions/vacancy_reader
+      TELETHON_INGEST_URL: http://api:8000/vacancies/ingest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - existing_n8n
+    volumes:
+      # Existing authorized session: do not run the original reader simultaneously.
+      - ../telegram_reader/vacancy_reader.session:/sessions/vacancy_reader.session
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  existing_n8n:
+    name: n8n_default
+    external: true

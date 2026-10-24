@@ -1,0 +1,23 @@
+# Fast, OFFLINE image for this machine: reuse the already installed WSL
+# Python 3.12 dependencies.  Dependencies are copied into the image;
+# the app runs entirely inside Docker (host .venv not mounted at runtime).
+#
+# For portable builds without local .venv use Dockerfile instead.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY --from=local_site_packages / /usr/local/lib/python3.12/site-packages/
+COPY app ./app
+COPY scripts ./scripts
+COPY pyproject.toml README.md ./
+
+RUN groupadd --gid 1000 matcher \
+    && useradd --uid 1000 --gid 1000 --create-home matcher \
+    && mkdir -p /app/data /sessions \
+    && chown -R matcher:matcher /app/data /sessions
+
+USER matcher
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"]
